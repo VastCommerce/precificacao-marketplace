@@ -2,581 +2,200 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { jsPDF } from 'jspdf'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Button } from '@/components/ui/button'
 
-type SavedProduct = {
-  id: string
-  nome: string
-  modo: 'ideal' | 'alvo'
-  preco: number
-  custoTotal: number
-  lucro: number
-  margemReal: number
-  comissao: number
-  taxaFixa: number
-  imposto: number
-  criadoEm: string
+type Marketplace = 'shopee' | 'ml'
+
+function toNumber(v: string) {
+  return Number(v.replace(',', '.')) || 0
 }
 
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
-}
-
-function toNumber(value: string) {
-  const normalized = value.replace(',', '.')
-  const num = parseFloat(normalized)
-  return Number.isFinite(num) ? num : 0
-}
-
-function formatBRL(value: number) {
+function formatBRL(v: number) {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
     currency: 'BRL',
-  }).format(Number.isFinite(value) ? value : 0)
+  }).format(v || 0)
 }
 
-function formatNumber(value: number, digits = 2) {
-  return new Intl.NumberFormat('pt-BR', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  }).format(Number.isFinite(value) ? value : 0)
+// ================== SHOPEE ==================
+function getShopeeFees(preco: number) {
+  if (preco < 80) return { perc: 0.2, fixo: 4 }
+  if (preco < 100) return { perc: 0.14, fixo: 16 }
+  if (preco < 200) return { perc: 0.14, fixo: 20 }
+  return { perc: 0.14, fixo: 26 }
 }
 
-function getShopeeFees(precoVenda: number) {
-  if (precoVenda < 80) {
-    return { percentual: 0.2, taxaFixa: 4, faixa: 'Abaixo de R$ 80,00' }
+// ================== MERCADO LIVRE ==================
+function getComissaoML(tipo: string, categoria: string) {
+  const tabela: any = {
+    eletronicos: { classico: 0.1, premium: 0.15 },
+    beleza: { classico: 0.115, premium: 0.165 },
+    veiculos: { classico: 0.12, premium: 0.17 },
+    moda: { classico: 0.14, premium: 0.19 },
   }
 
-  if (precoVenda < 100) {
-    return { percentual: 0.14, taxaFixa: 16, faixa: 'De R$ 80,00 até R$ 99,99' }
-  }
-
-  if (precoVenda < 200) {
-    return { percentual: 0.14, taxaFixa: 20, faixa: 'De R$ 100,00 até R$ 199,99' }
-  }
-
-  return { percentual: 0.14, taxaFixa: 26, faixa: 'R$ 200,00 ou mais' }
+  return tabela[categoria]?.[tipo] || 0.14
 }
 
-const STORAGE_KEY = 'shopee_saved_products_v1'
+function getFreteML(preco: number, peso: number) {
+  const faixas = [
+    [5.65, 6.55, 7.75, 18.52, 21.52, 24.67, 27.67, 31.42],
+    [6.05, 6.75, 7.95, 20.77, 24.22, 27.67, 31.12, 35.47],
+    [6.35, 7.95, 8.55, 23.62, 27.52, 31.57, 35.47, 39.37],
+  ]
 
+  let faixa = 0
+  if (preco < 19) faixa = 0
+  else if (preco < 49) faixa = 1
+  else if (preco < 79) faixa = 2
+  else if (preco < 99) faixa = 3
+  else if (preco < 119) faixa = 4
+  else if (preco < 149) faixa = 5
+  else if (preco < 199) faixa = 6
+  else faixa = 7
+
+  if (peso <= 0.3) return faixas[0][faixa]
+  if (peso <= 1) return faixas[1][faixa]
+  return faixas[2][faixa]
+}
+
+// ================== APP ==================
 export default function Page() {
-  const [modoCalculo, setModoCalculo] = useState<'ideal' | 'alvo'>('ideal')
-  const [nomeProduto, setNomeProduto] = useState('')
-  const [precoAlvo, setPrecoAlvo] = useState('0')
-  const [custoProduto, setCustoProduto] = useState('0')
-  const [custoEmbalagem, setCustoEmbalagem] = useState('0')
-  const [outrasDespesas, setOutrasDespesas] = useState('0')
-  const [freteExtra, setFreteExtra] = useState('0')
-  const [margemDesejada, setMargemDesejada] = useState('20')
-  const [impostoPercentual, setImpostoPercentual] = useState('0')
-  const [savedProducts, setSavedProducts] = useState<SavedProduct[]>([])
-  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
-  const [appInstalado, setAppInstalado] = useState(false)
+  const [marketplace, setMarketplace] = useState<Marketplace>('shopee')
+  const [tipoML, setTipoML] = useState<'classico' | 'premium'>('classico')
+  const [categoria, setCategoria] = useState('eletronicos')
+  const [peso, setPeso] = useState('0.3')
 
-  useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      try {
-        setSavedProducts(JSON.parse(raw) as SavedProduct[])
-      } catch {
-        setSavedProducts([])
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedProducts))
-  }, [savedProducts])
-
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {})
-    }
-  }, [])
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      e.preventDefault()
-      setInstallPrompt(e as BeforeInstallPromptEvent)
-    }
-
-    const installedHandler = () => {
-      setAppInstalado(true)
-      setInstallPrompt(null)
-    }
-
-    window.addEventListener('beforeinstallprompt', handler)
-    window.addEventListener('appinstalled', installedHandler)
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handler)
-      window.removeEventListener('appinstalled', installedHandler)
-    }
-  }, [])
+  const [custo, setCusto] = useState('0')
+  const [embalagem, setEmbalagem] = useState('0')
+  const [despesas, setDespesas] = useState('0')
+  const [imposto, setImposto] = useState('0')
+  const [margem, setMargem] = useState('20')
 
   const resultado = useMemo(() => {
-    const custo = toNumber(custoProduto)
-    const embalagem = toNumber(custoEmbalagem)
-    const despesas = toNumber(outrasDespesas)
-    const frete = toNumber(freteExtra)
-    const margem = toNumber(margemDesejada) / 100
-    const imposto = toNumber(impostoPercentual) / 100
+    const base =
+      toNumber(custo) +
+      toNumber(embalagem) +
+      toNumber(despesas)
 
-    const custoBase = custo + embalagem + despesas + frete
+    const impostoPerc = toNumber(imposto) / 100
+    const margemPerc = toNumber(margem) / 100
 
-    if (
-      modoCalculo === 'ideal' &&
-      custoBase === 0 &&
-      imposto === 0 &&
-      toNumber(margemDesejada) === 0
-    ) {
-      return {
-        custoBase: 0,
-        precoIdeal: 0,
-        comissaoShopee: 0,
-        taxaFixaPedido: 0,
-        impostoValor: 0,
-        lucro: 0,
-        margemReal: 0,
-        percentualComissao: 0,
-        faixaShopee: 'Abaixo de R$ 80,00',
+    let preco = base * 1.5
+    let comissao = 0
+    let taxa = 0
+
+    for (let i = 0; i < 50; i++) {
+      if (marketplace === 'shopee') {
+        const fee = getShopeeFees(preco)
+        const den = 1 - fee.perc - impostoPerc - margemPerc
+        preco = (base + fee.fixo) / den
+      } else {
+        const perc = getComissaoML(tipoML, categoria)
+        const frete = getFreteML(preco, toNumber(peso))
+        const den = 1 - perc - impostoPerc - margemPerc
+        preco = (base + frete) / den
       }
     }
 
-    let precoCalculado = 0
-
-    if (modoCalculo === 'alvo') {
-      precoCalculado = toNumber(precoAlvo)
+    if (marketplace === 'shopee') {
+      const f = getShopeeFees(preco)
+      comissao = preco * f.perc
+      taxa = f.fixo
     } else {
-      precoCalculado = custoBase > 0 ? custoBase * 1.5 : 0
-
-      for (let i = 0; i < 80; i++) {
-        const taxaAtual = getShopeeFees(precoCalculado)
-        const denominador = 1 - taxaAtual.percentual - imposto - margem
-
-        if (denominador <= 0) {
-          precoCalculado = 0
-          break
-        }
-
-        precoCalculado = (custoBase + taxaAtual.taxaFixa) / denominador
-      }
+      comissao = preco * getComissaoML(tipoML, categoria)
+      taxa = getFreteML(preco, toNumber(peso))
     }
 
-    const taxaFinal = getShopeeFees(precoCalculado)
-    const comissaoShopee = precoCalculado * taxaFinal.percentual
-    const taxaFixaPedido = taxaFinal.taxaFixa
-    const impostoValor = precoCalculado * imposto
-    const lucro = precoCalculado - custoBase - comissaoShopee - taxaFixaPedido - impostoValor
-    const margemReal = precoCalculado > 0 ? (lucro / precoCalculado) * 100 : 0
+    const impostoValor = preco * impostoPerc
+    const lucro = preco - base - comissao - taxa - impostoValor
 
-    return {
-      custoBase,
-      precoIdeal: precoCalculado,
-      comissaoShopee,
-      taxaFixaPedido,
-      impostoValor,
-      lucro,
-      margemReal,
-      percentualComissao: taxaFinal.percentual * 100,
-      faixaShopee: taxaFinal.faixa,
-    }
-  }, [
-    custoProduto,
-    custoEmbalagem,
-    outrasDespesas,
-    freteExtra,
-    margemDesejada,
-    impostoPercentual,
-    modoCalculo,
-    precoAlvo,
-  ])
-
-  const limpar = () => {
-    setModoCalculo('ideal')
-    setNomeProduto('')
-    setPrecoAlvo('0')
-    setCustoProduto('0')
-    setCustoEmbalagem('0')
-    setOutrasDespesas('0')
-    setFreteExtra('0')
-    setMargemDesejada('20')
-    setImpostoPercentual('0')
-  }
-
-  const salvarProduto = () => {
-    const novo: SavedProduct = {
-      id: crypto.randomUUID(),
-      nome: nomeProduto.trim() || `Produto ${savedProducts.length + 1}`,
-      modo: modoCalculo,
-      preco: resultado.precoIdeal,
-      custoTotal: resultado.custoBase,
-      lucro: resultado.lucro,
-      margemReal: resultado.margemReal,
-      comissao: resultado.comissaoShopee,
-      taxaFixa: resultado.taxaFixaPedido,
-      imposto: resultado.impostoValor,
-      criadoEm: new Date().toLocaleString('pt-BR'),
-    }
-
-    setSavedProducts((prev) => [novo, ...prev])
-  }
-
-  const removerProduto = (id: string) => {
-    setSavedProducts((prev) => prev.filter((item) => item.id !== id))
-  }
-
-  const exportarPDF = () => {
-    const doc = new jsPDF()
-
-    let y = 18
-    const line = (text: string, gap = 8) => {
-      doc.text(text, 14, y)
-      y += gap
-    }
-
-    doc.setFontSize(18)
-    line('Calculadora de Precificação Shopee', 10)
-
-    doc.setFontSize(11)
-    line(`Modo: ${modoCalculo === 'ideal' ? 'Preço ideal' : 'Preço alvo'}`)
-    line(`Produto: ${nomeProduto || 'Sem nome'}`)
-    line(`Preço: ${formatBRL(resultado.precoIdeal)}`)
-    line(`Custo total: ${formatBRL(resultado.custoBase)}`)
-    line(`Lucro estimado: ${formatBRL(resultado.lucro)}`)
-    line(`Comissão Shopee: ${formatBRL(resultado.comissaoShopee)}`)
-    line(`Taxa fixa: ${formatBRL(resultado.taxaFixaPedido)}`)
-    line(`Imposto: ${formatBRL(resultado.impostoValor)}`)
-    line(`Margem real: ${formatNumber(resultado.margemReal)}%`)
-    line(`Faixa aplicada: ${resultado.faixaShopee}`, 12)
-
-    if (savedProducts.length > 0) {
-      line('Produtos salvos:', 10)
-
-      savedProducts.slice(0, 10).forEach((item, index) => {
-        line(
-          `${index + 1}. ${item.nome} | ${formatBRL(item.preco)} | lucro ${formatBRL(item.lucro)}`,
-          7
-        )
-      })
-    }
-
-    doc.save('precificacao-shopee.pdf')
-  }
-
-  const instalarApp = async () => {
-    if (!installPrompt) return
-
-    await installPrompt.prompt()
-    const choice = await installPrompt.userChoice
-
-    if (choice.outcome === 'accepted') {
-      setInstallPrompt(null)
-    }
-  }
-
-  const lucroTotalSalvo = savedProducts.reduce((acc, item) => acc + item.lucro, 0)
+    return { preco, lucro, taxa, comissao }
+  }, [custo, embalagem, despesas, imposto, margem, marketplace, tipoML, categoria, peso])
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-orange-50 via-white to-slate-50 p-4 md:p-8">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <div className="rounded-3xl bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 p-[1px] shadow-lg">
-          <div className="rounded-3xl bg-white p-6 md:p-8">
-            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-              <div className="space-y-2">
-                <span className="inline-flex rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
-                  Marketplace • Shopee • PWA
-                </span>
-                <h1 className="text-3xl font-bold tracking-tight text-slate-900 md:text-4xl">
-                  Calculadora de Precificação Shopee
-                </h1>
-                <p className="max-w-2xl text-sm text-slate-600 md:text-base">
-                  Agora com instalação no celular, salvamento local de produtos, exportação em PDF e layout comercial.
-                </p>
-              </div>
+    <div className="min-h-screen bg-gray-50 p-6 space-y-6">
 
-              <div className="grid grid-cols-2 gap-3 md:min-w-[340px]">
-                <div className="rounded-2xl bg-slate-900 p-4 text-white">
-                  <p className="text-xs uppercase tracking-wide text-slate-300">Preço</p>
-                  <p className="mt-1 text-xl font-bold">{formatBRL(resultado.precoIdeal)}</p>
-                </div>
-                <div className="rounded-2xl bg-emerald-600 p-4 text-white">
-                  <p className="text-xs uppercase tracking-wide text-emerald-100">Lucro</p>
-                  <p className="mt-1 text-xl font-bold">{formatBRL(resultado.lucro)}</p>
-                </div>
-              </div>
-            </div>
+      {/* HEADER */}
+      <div className="bg-white p-6 rounded-2xl shadow flex justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Calculadora Marketplace</h1>
+          <p className="text-gray-500">Shopee + Mercado Livre</p>
+        </div>
+
+        <div className="text-right">
+          <p className="text-sm">Preço</p>
+          <p className="text-xl font-bold">{formatBRL(resultado.preco)}</p>
+        </div>
+      </div>
+
+      {/* MARKETPLACE */}
+      <div className="flex gap-2">
+        <Button onClick={() => setMarketplace('shopee')}>
+          Shopee
+        </Button>
+        <Button onClick={() => setMarketplace('ml')}>
+          Mercado Livre
+        </Button>
+      </div>
+
+      {/* ML CONFIG */}
+      {marketplace === 'ml' && (
+        <div className="grid grid-cols-3 gap-4 bg-white p-4 rounded-xl">
+          <div>
+            <Label>Tipo</Label>
+            <select onChange={(e) => setTipoML(e.target.value as any)}>
+              <option value="classico">Clássico</option>
+              <option value="premium">Premium</option>
+            </select>
+          </div>
+
+          <div>
+            <Label>Categoria</Label>
+            <select onChange={(e) => setCategoria(e.target.value)}>
+              <option value="eletronicos">Eletrônicos</option>
+              <option value="beleza">Beleza</option>
+              <option value="veiculos">Veículos</option>
+              <option value="moda">Moda</option>
+            </select>
+          </div>
+
+          <div>
+            <Label>Peso</Label>
+            <Input value={peso} onChange={(e) => setPeso(e.target.value)} />
           </div>
         </div>
+      )}
 
-        <Card className="rounded-3xl border-orange-100 shadow-sm">
-          <CardHeader>
-            <CardTitle>Modo de cálculo</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 md:flex-row">
-            <Button
-              type="button"
-              onClick={() => setModoCalculo('ideal')}
-              variant={modoCalculo === 'ideal' ? 'default' : 'outline'}
-              className="rounded-xl"
-            >
-              Preço ideal
-            </Button>
+      {/* INPUTS */}
+      <div className="grid grid-cols-3 gap-4 bg-white p-4 rounded-xl">
+        <div><Label>Custo</Label><Input value={custo} onChange={e => setCusto(e.target.value)} /></div>
+        <div><Label>Embalagem</Label><Input value={embalagem} onChange={e => setEmbalagem(e.target.value)} /></div>
+        <div><Label>Despesas</Label><Input value={despesas} onChange={e => setDespesas(e.target.value)} /></div>
+        <div><Label>Imposto (%)</Label><Input value={imposto} onChange={e => setImposto(e.target.value)} /></div>
+        <div><Label>Margem (%)</Label><Input value={margem} onChange={e => setMargem(e.target.value)} /></div>
+      </div>
 
-            <Button
-              type="button"
-              onClick={() => setModoCalculo('alvo')}
-              variant={modoCalculo === 'alvo' ? 'default' : 'outline'}
-              className="rounded-xl"
-            >
-              Preço alvo
-            </Button>
-
-            <div className="md:ml-auto flex flex-wrap gap-2">
-              {!appInstalado && installPrompt && (
-                <Button
-                  type="button"
-                  onClick={instalarApp}
-                  className="rounded-xl bg-slate-900 hover:bg-slate-800"
-                >
-                  Instalar App
-                </Button>
-              )}
-
-              <Button
-                type="button"
-                onClick={salvarProduto}
-                className="rounded-xl bg-orange-600 hover:bg-orange-700"
-              >
-                Salvar produto
-              </Button>
-
-              <Button
-                type="button"
-                variant="outline"
-                onClick={exportarPDF}
-                className="rounded-xl"
-              >
-                Exportar PDF
-              </Button>
-
-              <Button
-                type="button"
-                variant="outline"
-                onClick={limpar}
-                className="rounded-xl"
-              >
-                Limpar dados
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          <Card className="rounded-3xl border-orange-100 shadow-sm">
-            <CardHeader>
-              <CardTitle>Custos e parâmetros</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-2">
-              <div className="md:col-span-2 space-y-2">
-                <Label>Nome ou referência do produto</Label>
-                <Input
-                  value={nomeProduto}
-                  onChange={(e) => setNomeProduto(e.target.value)}
-                  placeholder="Ex.: Taça gin 550ml"
-                />
-              </div>
-
-              {modoCalculo === 'alvo' && (
-                <div className="md:col-span-2 space-y-2">
-                  <Label>Preço alvo de venda (R$)</Label>
-                  <Input
-                    value={precoAlvo}
-                    onChange={(e) => setPrecoAlvo(e.target.value)}
-                    inputMode="decimal"
-                  />
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <Label>Custo do produto (R$)</Label>
-                <Input
-                  value={custoProduto}
-                  onChange={(e) => setCustoProduto(e.target.value)}
-                  inputMode="decimal"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Custo da embalagem (R$)</Label>
-                <Input
-                  value={custoEmbalagem}
-                  onChange={(e) => setCustoEmbalagem(e.target.value)}
-                  inputMode="decimal"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Outras despesas (R$)</Label>
-                <Input
-                  value={outrasDespesas}
-                  onChange={(e) => setOutrasDespesas(e.target.value)}
-                  inputMode="decimal"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Frete/despesa extra (R$)</Label>
-                <Input
-                  value={freteExtra}
-                  onChange={(e) => setFreteExtra(e.target.value)}
-                  inputMode="decimal"
-                />
-              </div>
-
-              {modoCalculo === 'ideal' && (
-                <div className="space-y-2">
-                  <Label>Margem desejada (%)</Label>
-                  <Input
-                    value={margemDesejada}
-                    onChange={(e) => setMargemDesejada(e.target.value)}
-                    inputMode="decimal"
-                  />
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <Label>Imposto (%)</Label>
-                <Input
-                  value={impostoPercentual}
-                  onChange={(e) => setImpostoPercentual(e.target.value)}
-                  inputMode="decimal"
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-3xl border-orange-100 shadow-sm">
-            <CardHeader>
-              <CardTitle>Resultado</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="rounded-2xl bg-gradient-to-r from-orange-500 to-red-500 p-5 text-white">
-                <p className="text-sm text-orange-100">
-                  {modoCalculo === 'alvo' ? 'Preço informado' : 'Preço ideal de venda'}
-                </p>
-                <p className="mt-1 text-4xl font-bold">{formatBRL(resultado.precoIdeal)}</p>
-                <p className="mt-2 text-sm text-orange-100">{resultado.faixaShopee}</p>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Custo total</p>
-                  <p className="text-lg font-semibold text-slate-900">{formatBRL(resultado.custoBase)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-emerald-50 p-4">
-                  <p className="text-sm text-emerald-700">Lucro estimado</p>
-                  <p className="text-lg font-semibold text-emerald-800">{formatBRL(resultado.lucro)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Comissão Shopee</p>
-                  <p className="text-lg font-semibold text-slate-900">{formatBRL(resultado.comissaoShopee)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Taxa fixa por pedido</p>
-                  <p className="text-lg font-semibold text-slate-900">{formatBRL(resultado.taxaFixaPedido)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Imposto</p>
-                  <p className="text-lg font-semibold text-slate-900">{formatBRL(resultado.impostoValor)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Margem real</p>
-                  <p className="text-lg font-semibold text-slate-900">{formatNumber(resultado.margemReal)}%</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Percentual comissão</p>
-                  <p className="text-lg font-semibold text-slate-900">{formatNumber(resultado.percentualComissao)}%</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Modo atual</p>
-                  <p className="text-lg font-semibold text-slate-900">
-                    {modoCalculo === 'ideal' ? 'Preço ideal' : 'Preço alvo'}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      {/* RESULT */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-white p-4 rounded-xl">
+          <p>Lucro</p>
+          <p className="font-bold text-green-600">{formatBRL(resultado.lucro)}</p>
         </div>
 
-        <Card className="rounded-3xl border-orange-100 shadow-sm">
-          <CardHeader>
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <CardTitle>Produtos salvos</CardTitle>
-              <div className="rounded-full bg-orange-50 px-4 py-2 text-sm font-medium text-orange-700">
-                Lucro total salvo: {formatBRL(lucroTotalSalvo)}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {savedProducts.length === 0 ? (
-              <div className="rounded-2xl border border-dashed p-8 text-center text-sm text-slate-500">
-                Nenhum produto salvo ainda.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-slate-500">
-                      <th className="pb-3 pr-4">Produto</th>
-                      <th className="pb-3 pr-4">Modo</th>
-                      <th className="pb-3 pr-4">Preço</th>
-                      <th className="pb-3 pr-4">Lucro</th>
-                      <th className="pb-3 pr-4">Margem</th>
-                      <th className="pb-3 pr-4">Data</th>
-                      <th className="pb-3">Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {savedProducts.map((item) => (
-                      <tr key={item.id} className="border-b last:border-0">
-                        <td className="py-3 pr-4 font-medium text-slate-900">{item.nome}</td>
-                        <td className="py-3 pr-4">{item.modo === 'ideal' ? 'Ideal' : 'Alvo'}</td>
-                        <td className="py-3 pr-4">{formatBRL(item.preco)}</td>
-                        <td className="py-3 pr-4 text-emerald-700">{formatBRL(item.lucro)}</td>
-                        <td className="py-3 pr-4">{formatNumber(item.margemReal)}%</td>
-                        <td className="py-3 pr-4">{item.criadoEm}</td>
-                        <td className="py-3">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="rounded-xl"
-                            onClick={() => removerProduto(item.id)}
-                          >
-                            Remover
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <div className="bg-white p-4 rounded-xl">
+          <p>Comissão</p>
+          <p>{formatBRL(resultado.comissao)}</p>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl">
+          <p>Taxas/Frete</p>
+          <p>{formatBRL(resultado.taxa)}</p>
+        </div>
       </div>
+
     </div>
   )
 }
