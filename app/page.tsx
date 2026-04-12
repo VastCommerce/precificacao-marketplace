@@ -21,6 +21,11 @@ type SavedProduct = {
   criadoEm: string
 }
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
+
 function toNumber(value: string) {
   const normalized = value.replace(',', '.')
   const num = parseFloat(normalized)
@@ -70,12 +75,14 @@ export default function Page() {
   const [margemDesejada, setMargemDesejada] = useState('20')
   const [impostoPercentual, setImpostoPercentual] = useState('0')
   const [savedProducts, setSavedProducts] = useState<SavedProduct[]>([])
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  const [appInstalado, setAppInstalado] = useState(false)
 
   useEffect(() => {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       try {
-        setSavedProducts(JSON.parse(raw))
+        setSavedProducts(JSON.parse(raw) as SavedProduct[])
       } catch {
         setSavedProducts([])
       }
@@ -92,6 +99,26 @@ export default function Page() {
     }
   }, [])
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault()
+      setInstallPrompt(e as BeforeInstallPromptEvent)
+    }
+
+    const installedHandler = () => {
+      setAppInstalado(true)
+      setInstallPrompt(null)
+    }
+
+    window.addEventListener('beforeinstallprompt', handler)
+    window.addEventListener('appinstalled', installedHandler)
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler)
+      window.removeEventListener('appinstalled', installedHandler)
+    }
+  }, [])
+
   const resultado = useMemo(() => {
     const custo = toNumber(custoProduto)
     const embalagem = toNumber(custoEmbalagem)
@@ -101,6 +128,25 @@ export default function Page() {
     const imposto = toNumber(impostoPercentual) / 100
 
     const custoBase = custo + embalagem + despesas + frete
+
+    if (
+      modoCalculo === 'ideal' &&
+      custoBase === 0 &&
+      imposto === 0 &&
+      toNumber(margemDesejada) === 0
+    ) {
+      return {
+        custoBase: 0,
+        precoIdeal: 0,
+        comissaoShopee: 0,
+        taxaFixaPedido: 0,
+        impostoValor: 0,
+        lucro: 0,
+        margemReal: 0,
+        percentualComissao: 0,
+        faixaShopee: 'Abaixo de R$ 80,00',
+      }
+    }
 
     let precoCalculado = 0
 
@@ -213,11 +259,25 @@ export default function Page() {
       line('Produtos salvos:', 10)
 
       savedProducts.slice(0, 10).forEach((item, index) => {
-        line(`${index + 1}. ${item.nome} | ${formatBRL(item.preco)} | lucro ${formatBRL(item.lucro)}`, 7)
+        line(
+          `${index + 1}. ${item.nome} | ${formatBRL(item.preco)} | lucro ${formatBRL(item.lucro)}`,
+          7
+        )
       })
     }
 
     doc.save('precificacao-shopee.pdf')
+  }
+
+  const instalarApp = async () => {
+    if (!installPrompt) return
+
+    await installPrompt.prompt()
+    const choice = await installPrompt.userChoice
+
+    if (choice.outcome === 'accepted') {
+      setInstallPrompt(null)
+    }
   }
 
   const lucroTotalSalvo = savedProducts.reduce((acc, item) => acc + item.lucro, 0)
@@ -278,13 +338,39 @@ export default function Page() {
             </Button>
 
             <div className="md:ml-auto flex flex-wrap gap-2">
-              <Button type="button" onClick={salvarProduto} className="rounded-xl bg-orange-600 hover:bg-orange-700">
+              {!appInstalado && installPrompt && (
+                <Button
+                  type="button"
+                  onClick={instalarApp}
+                  className="rounded-xl bg-slate-900 hover:bg-slate-800"
+                >
+                  Instalar App
+                </Button>
+              )}
+
+              <Button
+                type="button"
+                onClick={salvarProduto}
+                className="rounded-xl bg-orange-600 hover:bg-orange-700"
+              >
                 Salvar produto
               </Button>
-              <Button type="button" variant="outline" onClick={exportarPDF} className="rounded-xl">
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={exportarPDF}
+                className="rounded-xl"
+              >
                 Exportar PDF
               </Button>
-              <Button type="button" variant="outline" onClick={limpar} className="rounded-xl">
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={limpar}
+                className="rounded-xl"
+              >
                 Limpar dados
               </Button>
             </div>
