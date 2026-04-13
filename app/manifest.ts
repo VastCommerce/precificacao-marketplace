@@ -2,13 +2,13 @@ import { MetadataRoute } from 'next'
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Precificação Marketplace',
-    short_name: 'Precificação',
-    description: 'Calculadora de precificação Shopee',
+    name: 'Calculadora Marketplace',
+    short_name: 'Marketplace',
+    description: 'Precificação Shopee e Mercado Livre com PWA.',
     start_url: '/',
     display: 'standalone',
-    background_color: '#ffffff',
-    theme_color: '#ea580c',
+    background_color: '#f8fafc',
+    theme_color: '#0f172a',
     icons: [
       {
         src: '/icon-192.png',

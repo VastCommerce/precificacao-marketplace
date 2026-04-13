@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,6 +20,11 @@ type CategoriaML =
   | 'construcao'
   | 'informatica'
   | 'eletrodomesticos'
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
 
 function toNumber(v: string) {
   return Number(v.replace(',', '.')) || 0
@@ -192,6 +197,44 @@ export default function Page() {
   const [margem, setMargem] = useState('20')
   const [precoAlvo, setPrecoAlvo] = useState('0')
 
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  const [appInstalado, setAppInstalado] = useState(false)
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {})
+    }
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault()
+      setInstallPrompt(e as BeforeInstallPromptEvent)
+    }
+
+    const installedHandler = () => {
+      setAppInstalado(true)
+      setInstallPrompt(null)
+    }
+
+    window.addEventListener('beforeinstallprompt', handler)
+    window.addEventListener('appinstalled', installedHandler)
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler)
+      window.removeEventListener('appinstalled', installedHandler)
+    }
+  }, [])
+
+  const instalarApp = async () => {
+    if (!installPrompt) return
+    await installPrompt.prompt()
+    const choice = await installPrompt.userChoice
+    if (choice.outcome === 'accepted') {
+      setInstallPrompt(null)
+    }
+  }
+
   const resultado = useMemo(() => {
     const custoNum = toNumber(custo)
     const embalagemNum = toNumber(embalagem)
@@ -320,6 +363,7 @@ export default function Page() {
                 <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
                   SaaS • Precificação • Shopee + Mercado Livre
                 </span>
+
                 <div>
                   <h1 className="text-3xl font-bold tracking-tight text-slate-900 md:text-4xl">
                     Calculadora Marketplace
@@ -328,6 +372,16 @@ export default function Page() {
                     Simule preço ideal ou preço alvo com comissão, imposto, peso cubado e frete automático.
                   </p>
                 </div>
+
+                {!appInstalado && installPrompt && (
+                  <Button
+                    type="button"
+                    onClick={instalarApp}
+                    className="rounded-xl bg-slate-900 hover:bg-slate-800"
+                  >
+                    Instalar aplicativo
+                  </Button>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:min-w-[480px]">

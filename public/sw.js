@@ -1,4 +1,4 @@
-const CACHE_NAME = 'precificacao-v3'
+const CACHE_NAME = 'calculadora-marketplace-v1'
 const OFFLINE_URL = '/offline'
 
 self.addEventListener('install', (event) => {
