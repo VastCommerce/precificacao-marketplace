@@ -7,6 +7,18 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 type Marketplace = 'shopee' | 'ml'
+type TipoML = 'classico' | 'premium'
+type CategoriaML =
+  | 'moda'
+  | 'eletronicos'
+  | 'games'
+  | 'joias'
+  | 'saude'
+  | 'livros'
+  | 'casa'
+  | 'construcao'
+  | 'informatica'
+  | 'eletrodomesticos'
 
 function toNumber(v: string) {
   return Number(v.replace(',', '.')) || 0
@@ -28,15 +40,21 @@ function getShopeeFees(preco: number) {
 }
 
 // ================== MERCADO LIVRE ==================
-function getComissaoML(tipo: string, categoria: string) {
-  const tabela: any = {
-    eletronicos: { classico: 0.1, premium: 0.15 },
-    beleza: { classico: 0.115, premium: 0.165 },
-    veiculos: { classico: 0.12, premium: 0.17 },
+function getComissaoML(tipo: TipoML, categoria: CategoriaML) {
+  const tabela = {
     moda: { classico: 0.14, premium: 0.19 },
-  }
+    eletronicos: { classico: 0.13, premium: 0.18 },
+    games: { classico: 0.13, premium: 0.18 },
+    joias: { classico: 0.125, premium: 0.175 },
+    saude: { classico: 0.12, premium: 0.17 },
+    livros: { classico: 0.12, premium: 0.17 },
+    casa: { classico: 0.115, premium: 0.165 },
+    construcao: { classico: 0.115, premium: 0.165 },
+    informatica: { classico: 0.11, premium: 0.16 },
+    eletrodomesticos: { classico: 0.11, premium: 0.16 },
+  } as const
 
-  return tabela[categoria]?.[tipo] || 0.14
+  return tabela[categoria][tipo]
 }
 
 function getFreteML(preco: number, peso: number) {
